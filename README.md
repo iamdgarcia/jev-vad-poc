@@ -50,6 +50,74 @@ the same audio frame; costs ~2× a single question):
 d = vad.decide("sí sí", agent_context="Tengo vuelos jueves y viernes.")
 ```
 
+## Where it sits in the pipeline
+
+`jev-vad` is a **semantic VAD layer** between the streaming ASR and
+the turn manager. It refines what plain energy-based VAD cannot see:
+*what the words mean* while the speaker is mid-utterance.
+
+```mermaid
+flowchart TD
+    MIC["Microphone audio"] --> ASR["Streaming ASR<br/>partial transcripts"]
+    MIC --> AVAD["Acoustic VAD<br/>energy + end-of-speech pauses"]
+
+    ASR --> GATE{"partial grew<br/>meaningfully?<br/>(delta gating)"}
+    GATE -- "no" --> WAIT["keep last decision"]
+    GATE -- "yes" --> MODE{"TTS playing?<br/>(agent speaking?)"}
+
+    MODE -- "yes" --> BARGE["jev-vad · decide_barge_in"]
+    BARGE --> INT{"d.should_interrupt?<br/>take_floor ≥ 0.30<br/>+ filler guard"}
+    INT -- "yes · take_floor" --> STOP["Stop TTS playback<br/>open the listener"]
+    INT -- "no" --> KEEP["Keep playing<br/>(backchannel / side_talk:<br/>optionally lower volume)"]
+
+    MODE -- "no" --> TURN["jev-vad · decide_turn"]
+    TURN --> EOT{"turn_complete AND<br/>acoustic end-of-speech<br/>pause detected?"}
+    EOT -- "yes" --> RESPOND["Commit turn →<br/>dialogue agent responds"]
+    EOT -- "no" --> LISTEN["Keep listening<br/>(user mid-utterance)"]
+```
+
+Reading the diagram:
+
+- **Agent speaking (left branch):** `decide_barge_in` classifies the
+  interjection. Only `take_floor` at the tuned threshold stops TTS;
+  backchannels and side-talk keep playback (a real pipeline may duck
+  the volume instead of doing nothing).
+- **Agent silent (right branch):** `decide_turn` is a **soft** signal.
+  Because it judges semantic completeness, not ASR truncation, it must
+  be AND-ed with the acoustic end-of-speech pause before committing
+  the turn (see [Known limitations](#known-limitations)).
+- **Delta gating:** each decision costs ~300–600 ms on CPU; only
+  re-decide when the partial grew meaningfully, not on every token.
+
+## Why two questions instead of one
+
+A single VAD signal cannot serve both jobs, because the two failure
+modes pull the threshold in opposite directions:
+
+- **Barge-in (agent speaking).** The question is *policy*: should the
+  agent yield the floor? Here a false interrupt is cheap (the agent
+  restarts a sentence) but a missed correction is expensive (the agent
+  keeps talking over the user — the worst UX failure). The signal is
+  strong (F1 0.76 tuned) because interjection *text* is disambiguating:
+  "no, al revés, el del jueves" vs "sí sí". So we run the model on
+  every meaningful delta and bias the operating point toward
+  recall (0.85).
+- **Turn-end (agent silent).** The question is *prediction*: has the
+  user finished? Here a false end-of-turn is expensive (the agent
+  answers a half-spoken request — repair costs double) while a missed
+  one just adds latency. And the signal is weak: text-only judgments
+  of a hard ASR cut still read complete (0.75–0.96). So we use it as a
+  **soft** signal, AND-ed with the acoustic end-of-speech pause,
+  biased toward precision.
+
+One combined "is this turn over and should I interrupt?" question
+would couple these two operating points and inherit the worst of both:
+high recall where precision is needed and vice versa. Two questions,
+two thresholds, one model — each mode gets its own failure-cost
+asymmetry. The voice pipeline picks the question that matches its
+state (TTS playing or not) and only pays for one decision per audio
+frame.
+
 ### Offline / air-gapped deployments
 
 ```bash
