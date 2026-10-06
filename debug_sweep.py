@@ -452,7 +452,9 @@ def _decide(
     res.labels.append(sample_label)
     for qid, ans in answers.items():
         pred = ans["choice"]
-        truth = sample_label
+        # Dataset truth labels differ from model option names:
+        # mid_turn (dataset) <-> still_speaking (model option).
+        truth = {"mid_turn": "still_speaking"}.get(sample_label, sample_label)
         res.confusion[(truth, pred)] += 1
         res.per_label_total[truth] += 1
         res.per_label_correct[truth] += pred == truth
@@ -563,9 +565,12 @@ def main() -> None:
         samples = samples[:10] + samples[50:65]
     if args.best:
         agent = load_agent(ensure_model_dir(None))
-        # winner from the full run: barge_v1/dict, th 0.30 + filler rule
-        res = run_config(agent, samples, "barge_v1", "dict")
-        print(f"barge_v1+dict acc={res.accuracy:.2f}")
+        # winner from the full run: barge_v1/dict on the 50-phrase barge half
+        barge = [
+            s for s in samples if s.label in ("take_floor", "backchannel", "side_talk")
+        ]
+        res = run_config(agent, barge, "barge_v1", "dict")
+        print(f"barge_v1+dict (barge half, n={len(barge)}) acc={res.accuracy:.2f}")
         return
 
     print(

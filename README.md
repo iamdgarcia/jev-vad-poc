@@ -157,6 +157,12 @@ python replay.py               # small self-check scenarios
 pytest tests/ -v               # 6 contract tests
 ```
 
+The dataset ships as `benchmark/benchmark.json` (100 phrases: text,
+label, agent_context; md5 293f9a66d26af383013e85d0ce076256) with the
+sweep's per-config results (`benchmark/sweep_results.json`), the tuned
+operating-point derivation (`benchmark/operating_point.json`), and the
+cloud-run measurements (`benchmark/cloud_bench1.json`).
+
 ### Question-wording sweep (accuracy over the labeled set)
 
 | Question set | Framing | dict state | raw state | turns state |
@@ -199,18 +205,31 @@ The filler guard matters: bare "eh"/"mhm" score ~50/50 at the model
 (intonation decides in real speech, not text) and were the largest
 false-interrupt source.
 
-### Latency (int4 blk32, laptop CPU, 4 intra-op threads)
+### Latency (int4 blk32; n=100 timed runs per cell after warm-up)
 
-| Measurement | p50 | min | p90 |
+| Measurement | Laptop (i7-10850H, 4 thr) p50 | Cloud Run (Xeon 2.8 GHz, 8 vCPU) p50 | cloud p99 |
 |---|---|---|---|
-| 1-question decision, 4-word partial | 326 ms | 315 ms | 416 ms |
-| 1-question decision, 8-word partial | 386 ms | 346 ms | 778 ms |
-| 1-question decision, 32-word partial | 609 ms | 596 ms | 1006 ms |
-| 2-question combined pass | ~1094 ms | — | — |
-| `predict_batch`, 8 states | 343 ms/state | — | — |
+| 1-question, 4-word partial | 326 ms | **101 ms** | 178 ms |
+| 1-question, 8-word partial | 386 ms | **108 ms** | 168 ms |
+| 1-question, 32-word partial | 609 ms | **187 ms** | 268 ms |
+| 2-question combined pass | ~1094 ms | 276 ms (p90 333) | — |
+| `predict_batch`, 8 states | 343 ms/state | **136 ms/state** | — |
 
-First decision after load: ~1.2 s (warm-up). Model load: ~18 s from
-warm OS cache, ~1 min including a cold 206 MB download.
+First decision after load: ~1.2 s (warm-up). Model load (cold,
+artifact inside the image): 19.6 s. Cloud measurements from a
+deterministic Cloud Run Job (`cloud_bench.py`); sweep accuracies are
+identical across both environments (verified).
+
+## Related work: where this sits in iabto-ms-bc
+
+Investigation docs (see `docs/`): the serving repo's Pipecat pipeline
+runs Silero VAD + smart-turn v3.2 (audio-side, 146 ms p50, 8.7 MB ONNX)
++ STT endpointing (Chirp 3, 500 ms floor). jev-vad complements them
+text-side: turn-end veto after the acoustic decision, and barge-in
+policy where today any transcribed word interrupts. The fastest
+dispatch path uses the last interim transcript at VAD stop (~200 ms
+after T0) with jev-vad as the semantic veto, hiding its latency under
+the STT finalization (p99 268 ms < 500 ms Chirp floor).
 
 ## Known limitations
 
