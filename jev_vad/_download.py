@@ -14,6 +14,7 @@ store so huggingface_hub works without disabling verification.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 HF_REPO = "androidli/laya-multilingual-onnx-int4"
@@ -63,7 +64,23 @@ def ensure_model_dir(model_dir: Path | None = None) -> Path:
 
     # Small files through snapshot_download (ONNXAgent needs config +
     # tokenizer in one dir); the big graph + weights via hf_hub_download.
+    # Everything is then COPIED (real files, no symlinks) into one clean
+    # dir: onnxruntime resolves symlinks before validating external data,
+    # so a symlinked .onnx whose .data lives in the same snapshot dir
+    # still fails validation ("External data path escapes model
+    # directory"). Real files keep the graph and its .data together.
     snapshot_dir = Path(snapshot_download(HF_REPO, allow_patterns=SMALL_PATTERNS))
-    for name in (ONNX_NAME, f"{ONNX_NAME}.data"):
-        hf_hub_download(HF_REPO, name)
-    return snapshot_dir
+    clean = snapshot_dir.parent / "jev-vad-bundle"
+    clean.mkdir(parents=True, exist_ok=True)
+    for src in (
+        *[snapshot_dir / p for p in ("rl_agent_config.json",)],
+        *sorted(snapshot_dir.glob("tokenizer/*")),
+        *sorted(snapshot_dir.glob("encoder/*")),
+        Path(hf_hub_download(HF_REPO, ONNX_NAME)),
+        Path(hf_hub_download(HF_REPO, f"{ONNX_NAME}.data")),
+    ):
+        dst = clean / src.name if src.parent == snapshot_dir else clean / src.relative_to(snapshot_dir)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not dst.exists() or dst.stat().st_size != src.stat().st_size:
+            shutil.copyfile(src, dst)
+    return clean
