@@ -1,4 +1,9 @@
 # jev-vad
+## Paper
+
+This repository accompanies our initial exploration of **Semantic Voice Activity Detection (Semantic VAD)** for real-time voice agents.
+
+📄 **Paper:** [Semantic VAD for Real-Time Voice Agents](https://doi.org/10.5281/zenodo.23233331)
 
 **Semantic VAD for Spanish voice pipelines** — barge-in, backchannel
 and turn-end detection over partial ASR transcripts, powered by the
